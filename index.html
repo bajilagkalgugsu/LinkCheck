@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <title>LinkCheck</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="container">
+    <h1>LinkCheck</h1>
+    <input type="text" id="urlInput" placeholder="검사할 URL 입력">
+    <button id="checkButton" disabled>검사</button>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    const dangerousSites = [
+      "joetracker", "qoogler", "seriall", "getavirus", "yhaho.com",
+      "tango-deg.com", "thebestgame2020.com", "trupir-asia.info",
+      "inwords.website", "goooogle.com", "wwwnaver.com", "좌관이아",
+      "gelsifying.info", "aimeblog", "bnatsaba", "crashie.com",
+      "FAST DOWNLOAD ARCHIVE", "goggle.com",
+      "yotube.com", "youtyube.com", "wwwyoutube.com", "Poshukach",
+      "coocle.com", "ggole.com", "theannoyingsite.com", "VX Vault"
+    ];
+
+    const foreignDomains = [".cn", ".ru", ".pl", ".fr", ".tk", ".xyz"];
+    const riskyKeywords = ["login", "bank", "free-money"];
+    const patternScores = { "impersonate": 2, "bait": 2, "trojan": 3, "popup": 1, "creepy": 1 };
+
+    let dangerWords = [];
+    let adultWords = [];
+
+    // 🔹 두 CSV 동시에 로드
+    const loadCSVs = async () => {
+      try {
+        const [dangerText, adultText] = await Promise.all([
+          fetch("dangerous.csv").then(res => res.text()),
+          fetch("adult.csv").then(res => res.text())
+        ]);
+
+        dangerWords = dangerText.split(/\r?\n/).map(v => v.trim().toLowerCase()).filter(Boolean);
+        adultWords = adultText.split(/\r?\n/).map(v => v.trim().toLowerCase()).filter(Boolean);
+
+        console.log("CSV 위험 단어 로드 완료:", dangerWords, adultWords);
+
+        // CSV 로드 완료 후 버튼 활성화
+        document.getElementById("checkButton").disabled = false;
+      } catch (err) {
+        console.error("CSV 로딩 실패:", err);
+      }
+    };
+
+    loadCSVs();
+
+    function extractDomain(url) {
+      try {
+        const u = new URL(url);
+        return u.hostname.replace('www.', '');
+      } catch {
+        return url;
+      }
+    }
+
+    function getKoreanRatio(text) {
+      const kor = text.match(/[가-힣]/g);
+      if (!kor) return 0;
+      return kor.length / text.length;
+    }
+
+    document.getElementById("checkButton").addEventListener("click", checkLink);
+
+    function checkLink() {
+      const url = document.getElementById('urlInput').value.trim();
+      const resultDiv = document.getElementById('result');
+      let score = 0;
+      let messages = [];
+
+      if (!url) {
+        resultDiv.textContent = "URL을 입력하세요!";
+        resultDiv.className = "danger";
+        return;
+      }
+
+      if (!dangerWords.length || !adultWords.length) {
+        resultDiv.textContent = "⚠️ CSV가 아직 로드 중입니다. 잠시 후 다시 시도하세요.";
+        resultDiv.className = "danger";
+        return;
+      }
+
+      const domain = extractDomain(url);
+      const lowerUrl = url.toLowerCase();
+
+      // 🔹 기존 위험 사이트 체크
+      if (dangerousSites.includes(domain)) { score += 2; messages.push("위험 사이트 도메인 포함"); }
+      if (!url.startsWith("https://")) { score += 2; messages.push("HTTPS가 아닙니다"); }
+      if (url.length > 50) { score += 1; messages.push("URL 길이가 길어요"); }
+      if (url.length < 10) { score += 1; messages.push("URL이 너무 짧아요"); }
+      const specialChars = url.match(/[@#$%^&*()<>?]/g);
+      if (specialChars && specialChars.length > 2) { score += 2; messages.push("특수문자가 많아요"); }
+      if (/%[0-9A-Fa-f]{2}/.test(url)) { score += 1; messages.push("인코딩된 문자 포함"); }
+      if (/https?:\/\/(\d{1,3}\.){3}\d{1,3}/.test(url)) { score += 3; messages.push("IP 주소 형태 URL입니다"); }
+      if (foreignDomains.some(ext => domain.endsWith(ext))) { score += 2; messages.push("외국 도메인입니다"); }
+      const koreanRatio = getKoreanRatio(url);
+      if (koreanRatio > 0 && koreanRatio <= 0.2) { score += 1; messages.push("어색한 한국어 비율"); }
+      if (riskyKeywords.some(keyword => lowerUrl.includes(keyword))) { score += 2; messages.push("피싱/위험 키워드 포함"); }
+
+      // 🔹 위험 패턴 시뮬레이션
+      if (["joetracker", "qoogler", "seriall", "trupir-asia.info", "goooogle.com", "좌관이아"].includes(domain)) {
+        score += patternScores["trojan"]; messages.push("트로이 목마/바이러스 다운로드 유도");
+      }
+      if (["tango-deg.com", "wwwnaver.com", "wwwyoutube.com", "yotube.com", "youtyube.com", "coocle.com", "ggole.com", "theannoyingsite.com"].includes(domain)) {
+        score += patternScores["popup"]; messages.push("무한 광고/팝업");
+      }
+      if (["좌관이아", "trupir-asia.info", "VX Vault"].includes(domain)) {
+        score += patternScores["creepy"]; messages.push("기괴한 콘텐츠 포함");
+      }
+
+      // 🔹 CSV 일반 위험 단어 체크
+      for (const word of dangerWords) {
+        if (lowerUrl.includes(word)) {
+          score += 5;
+          messages.push(`CSV 위험 단어 포함: ${word}`);
+        }
+      }
+
+      // 🔹 CSV 음란물 단어 체크
+      let adultFlag = false;
+      for (const word of adultWords) {
+        if (lowerUrl.includes(word)) {
+          adultFlag = true;
+          messages.push(`⚠️ 음란물 주의: ${word}`);
+        }
+      }
+
+      // 🔹 결과 출력
+      if (score >= 3 || adultFlag) {
+        resultDiv.textContent = messages.join(", ");
+        resultDiv.className = "danger";
+      } else {
+        resultDiv.textContent = "✅ 안전해 보입니다";
+        resultDiv.className = "safe";
+      }
+    }
+  </script>
+</body>
+
+</html>
